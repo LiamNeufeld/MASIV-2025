@@ -1,7 +1,7 @@
 {
   "private": true,
   "scripts": {
-    "build": "cd frontend && vite build",
+    "build": "vite build",
     "dev": "cd frontend && vite",
     "start": "cd frontend && vite preview"
   },
