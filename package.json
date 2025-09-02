@@ -1,0 +1,11 @@
+{
+  "private": true,
+  "scripts": {
+    "build": "cd frontend && vite build",
+    "dev": "cd frontend && vite",
+    "start": "cd frontend && vite preview"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  }
+}
