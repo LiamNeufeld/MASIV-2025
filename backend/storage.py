@@ -2,23 +2,41 @@ import os
 import sqlite3
 import json
 import time
-from contextlib import contextmanager
+from contextmanager import contextmanager
 from typing import List, Dict, Any, Optional
 
-# Configure where the SQLite DB lives.
-# For hosting, set: PROJECTS_DB_PATH=/data/projects.db (and mount a disk at /data)
-DB_PATH = os.environ.get("PROJECTS_DB_PATH") or os.path.join(os.path.dirname(__file__), "projects.db")
+# Prefer env var; on Render without disks, set PROJECTS_DB_PATH=/tmp/projects.db
+_env_path = os.environ.get("PROJECTS_DB_PATH")
+if _env_path:
+    DB_PATH = _env_path
+elif os.environ.get("RENDER"):
+    DB_PATH = "/tmp/projects.db"
+else:
+    DB_PATH = os.path.join(os.path.dirname(__file__), "projects.db")
+
+DB_DIR = os.path.dirname(DB_PATH) or "."
+os.makedirs(DB_DIR, exist_ok=True)
 
 
 @contextmanager
 def _conn():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
     try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
         yield conn
         conn.commit()
+    except sqlite3.OperationalError as e:
+        if "unable to open database file" in str(e):
+            raise RuntimeError(
+                f"SQLite could not open DB at '{DB_PATH}'. On Render use "
+                f"PROJECTS_DB_PATH=/tmp/projects.db (ephemeral) or a mounted disk."
+            ) from e
+        raise
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def _ensure_schema():
@@ -32,7 +50,7 @@ def _ensure_schema():
                 query TEXT,
                 filters_json TEXT,
                 bbox TEXT,
-                limit INTEGER,
+                limit_n INTEGER,
                 updated_at REAL,
                 UNIQUE(username, name)
             )
@@ -49,7 +67,6 @@ def save_project(
     bbox: List[float],
     limit: int,
 ) -> None:
-    """Create or update a saved project (UPSERT on username+name)."""
     if not username or not name:
         raise ValueError("username and name are required")
 
@@ -60,13 +77,13 @@ def save_project(
     with _conn() as c:
         c.execute(
             """
-            INSERT INTO projects (username, name, query, filters_json, bbox, limit, updated_at)
+            INSERT INTO projects (username, name, query, filters_json, bbox, limit_n, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(username, name) DO UPDATE SET
               query=excluded.query,
               filters_json=excluded.filters_json,
               bbox=excluded.bbox,
-              limit=excluded.limit,
+              limit_n=excluded.limit_n,
               updated_at=excluded.updated_at
             """,
             (username, name, query or "", filters_json, bbox_str, int(limit), ts),
@@ -74,7 +91,6 @@ def save_project(
 
 
 def list_projects(username: str) -> List[Dict[str, Any]]:
-    """Return [{name, updated_at}] for a user."""
     if not username:
         return []
     with _conn() as c:
@@ -82,16 +98,15 @@ def list_projects(username: str) -> List[Dict[str, Any]]:
             "SELECT name, updated_at FROM projects WHERE username=? ORDER BY updated_at DESC",
             (username,),
         ).fetchall()
-        return [{"name": r["name"], "updated_at": r["updated_at"]} for r in rows]
+        return [{"name": r["name"], "updated_at": float(r["updated_at"] or 0)} for r in rows]
 
 
 def load_project(username: str, name: str) -> Optional[Dict[str, Any]]:
-    """Return the saved project payload or None."""
     if not username or not name:
         return None
     with _conn() as c:
         r = c.execute(
-            "SELECT query, filters_json, bbox, limit FROM projects WHERE username=? AND name=?",
+            "SELECT query, filters_json, bbox, limit_n AS limit FROM projects WHERE username=? AND name=?",
             (username, name),
         ).fetchone()
         if not r:
@@ -110,7 +125,7 @@ def load_project(username: str, name: str) -> Optional[Dict[str, Any]]:
             "query": r["query"] or "",
             "filters": filters,
             "bbox": bbox,
-            "limit": int(r["limit"] or 0),
+            "limit": int(r["limit"] or 0),  # API still returns 'limit'
         }
 
 
