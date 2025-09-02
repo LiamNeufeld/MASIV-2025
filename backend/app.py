@@ -1,3 +1,4 @@
+# backend/app.py
 import os
 import re
 import json
@@ -11,11 +12,28 @@ from flask_cors import CORS, cross_origin
 import data_sources as ds
 import storage as st
 
+
 # -----------------------------------------------------------------------------
-# App & CORS (origin configurable for deploy)
+# App & CORS (origin(s) configurable via env; support comma-separated list)
 # -----------------------------------------------------------------------------
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": os.environ.get("CORS_ORIGIN", "*")}})
+
+_origins_env = os.environ.get("CORS_ORIGIN", "*")
+if _origins_env == "*":
+    _origins: Any = "*"
+else:
+    _origins = [o.strip() for o in _origins_env.split(",") if o.strip()]
+
+CORS(app, resources={r"/api/*": {"origins": _origins}})
+
+
+# -----------------------------------------------------------------------------
+# Small root route so Render's probe gets HTTP 200 on "/"
+# -----------------------------------------------------------------------------
+@app.route("/")
+def index():
+    return "OK", 200
+
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -29,7 +47,6 @@ def _parse_bbox(arg: str) -> Tuple[float, float, float, float]:
 
 
 def _norm_zone(z: str) -> str:
-    """Normalize zoning code for comparison."""
     if not z:
         return ""
     z = z.upper().replace(" ", "")
@@ -67,24 +84,27 @@ def _parse_int(txt: str):
 
 
 def _feature_matches_filters(props: Dict[str, Any], filters: List[Dict[str, Any]]) -> bool:
-    """Apply parsed filters to one feature's props."""
-    # Extract comparable fields
+    """Apply parsed filters to one feature's properties."""
     zoning = _norm_zone(props.get("zoning") or "")
+
     assessed_value = None
     try:
         assessed_value = float(props.get("assessed_value")) if props.get("assessed_value") is not None else None
     except Exception:
         pass
+
     height_m = None
     try:
         height_m = float(props.get("height_m")) if props.get("height_m") is not None else None
     except Exception:
         pass
+
     year = None
     try:
         year = int(props.get("year")) if props.get("year") is not None else None
     except Exception:
         pass
+
     community = (props.get("community") or "").strip().lower()
 
     for f in filters or []:
@@ -93,14 +113,13 @@ def _feature_matches_filters(props: Dict[str, Any], filters: List[Dict[str, Any]
         val = f.get("value")
 
         if attr == "zoning":
-            # Value may be list of codes; exact match for full codes, prefix for short tokens
             wanted = [str(v).strip().upper() for v in (val if isinstance(val, list) else [val])]
             ok = False
             for code in wanted:
                 code_norm = _norm_zone(code)
                 if not code_norm:
                     continue
-                # short tokens (<=3 letters) => prefix match; else exact
+                # Short tokens (<=3 letters) allow prefix match; else exact
                 if len(code_norm) <= 3 and zoning.startswith(code_norm):
                     ok = True
                     break
@@ -157,8 +176,7 @@ def _feature_matches_filters(props: Dict[str, Any], filters: List[Dict[str, Any]
             if not target or community != target:
                 return False
 
-        # Unknown attributes are ignored gracefully
-
+        # Unknown attributes: ignore gracefully
     return True
 
 
@@ -177,7 +195,7 @@ def _apply_filters(filters: List[Dict[str, Any]], features: List[Dict[str, Any]]
 
 
 def _parse_text_to_filters(q: str) -> List[Dict[str, Any]]:
-    """Deterministic, no-key parser. Returns structured filters."""
+    """Deterministic parser (no external calls)."""
     filters: List[Dict[str, Any]] = []
     qq = (q or "").strip().lower()
     if not qq:
@@ -198,7 +216,6 @@ def _parse_text_to_filters(q: str) -> List[Dict[str, Any]]:
             t = tok.strip().upper()
             if not t:
                 continue
-            # Accept short tokens like DC, CR, MU, plus full codes like R-CG, M-C1, etc.
             if re.match(r"^[A-Z]{1,3}(?:-[A-Z0-9]{1,4})+$", t) or re.match(r"^[A-Z]{1,3}\d?$", t) or re.match(r"^[A-Z]{1,3}$", t):
                 codes.append(t)
         if codes:
@@ -269,7 +286,7 @@ def _parse_text_to_filters(q: str) -> List[Dict[str, Any]]:
 def _maybe_huggingface_parse(q: str) -> List[Dict[str, Any]]:
     """Optional: use a HF model to extract filters. Falls back to deterministic on failure."""
     key = os.environ.get("HUGGINGFACE_API_KEY")
-    model = os.environ.get("HUGGINGFACE_MODEL")  # optional; only used if provided
+    model = os.environ.get("HUGGINGFACE_MODEL")  # e.g. meta-llama/Llama-3.1-8B-Instruct
     if not key or not model:
         return _parse_text_to_filters(q)
 
@@ -289,12 +306,10 @@ def _maybe_huggingface_parse(q: str) -> List[Dict[str, Any]]:
         )
         resp.raise_for_status()
         text = resp.json()
-        # HF responses vary by model; attempt to pull the text
         if isinstance(text, list) and text and "generated_text" in text[0]:
             out = text[0]["generated_text"]
         else:
             out = json.dumps(text)
-        # Extract JSON object from output
         jmatch = re.search(r"\{[\s\S]*\}", out)
         if not jmatch:
             return _parse_text_to_filters(q)
@@ -305,6 +320,7 @@ def _maybe_huggingface_parse(q: str) -> List[Dict[str, Any]]:
         return _parse_text_to_filters(q)
     except Exception:
         return _parse_text_to_filters(q)
+
 
 # -----------------------------------------------------------------------------
 # Routes
@@ -318,8 +334,8 @@ def health():
 @app.route("/api/buildings")
 def buildings():
     """
-    Returns a GeoJSON FeatureCollection of REAL parcels (with assessed_value) +
-    zoning joined from Land Use (or parcel field). No synthetic fallbacks.
+    Returns a GeoJSON FeatureCollection of REAL parcels (with assessed_value)
+    + zoning joined from Land Use (or parcel field). No synthetic fallbacks.
     """
     try:
         bbox = _parse_bbox(request.args.get("bbox", ""))
@@ -331,15 +347,12 @@ def buildings():
         return jsonify({
             "error": "BUILDINGS_FETCH_FAILED",
             "message": str(e),
-            "hint": (
-                "Check ARCGIS_PARCELS_URL/ARCGIS_LANDUSE_URL or Socrata env vars. "
-                "Use /api/_debug/* to verify."
-            )
+            "hint": "Check ARCGIS_PARCELS_URL/ARCGIS_LANDUSE_URL or Socrata env vars; use /api/_debug/* to verify."
         }), 500
 
 
 @app.route("/api/llm_filter", methods=["POST", "OPTIONS"])
-@cross_origin()  # answers CORS preflight in dev; CORS(app, ...) handles in prod
+@cross_origin()  # answers CORS preflight in dev; global CORS handles in prod
 def llm_filter():
     if request.method == "OPTIONS":
         return ("", 204)
@@ -391,7 +404,8 @@ def filter_apply():
         app.logger.exception("filter_apply error")
         return jsonify({"error": "FILTER_APPLY_FAILED", "message": str(e)}), 500
 
-# ---------------- Projects (SQLite) ----------------
+
+# ---------------- Projects (SQLite or Postgres via storage.py) ----------------
 @app.route("/api/projects/save", methods=["POST"])
 def projects_save():
     data = request.get_json(force=True, silent=True) or {}
@@ -439,6 +453,7 @@ def projects_load():
         app.logger.exception("projects_load error")
         return jsonify({"error": "PROJECT_LOAD_FAILED", "message": str(e)}), 500
 
+
 # ---------------- Debug helpers ----------------
 @app.route("/api/_debug/config")
 def debug_config():
@@ -479,10 +494,11 @@ def debug_arcgis():
 def debug_ping():
     return jsonify({"ok": True})
 
+
 # -----------------------------------------------------------------------------
-# Entrypoint
+# Entrypoint (bind to Render's $PORT)
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "5001"))
-    # debug=True shows tracebacks in console (handy on Render/Railway logs)
+    port = int(os.environ.get("PORT", "10000"))  # Render assigns PORT; default 10000
+    print(f"[boot] Starting Flask on 0.0.0.0:{port} (CORS_ORIGIN={_origins_env})")
     app.run(host="0.0.0.0", port=port, debug=True)
