@@ -1,54 +1,90 @@
-// Centralized API base. Safe use of ?? with || (parenthesized).
-const RAW_BASE = (import.meta?.env?.VITE_API_BASE ?? "");
-// If you want a hard fallback path during dev, change "" to "/api".
-const API_BASE = (RAW_BASE || "").replace(/\/$/, "");
+// frontend/src/api.js
 
-// ---- small helpers ----
-async function _json(res) {
-  const t = await res.text();
-  try { return JSON.parse(t); } catch { return { _raw: t }; }
+// If you ALSO set VITE_API_BASE on Vercel, we'll use it; otherwise we keep
+// calls relative (and vercel.json will rewrite /api/* to Render).
+const RAW_BASE = (import.meta?.env?.VITE_API_BASE || "").trim();
+const BASE = RAW_BASE.endsWith("/") ? RAW_BASE.slice(0, -1) : RAW_BASE;
+
+function apiUrl(path) {
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return BASE ? `${BASE}${p}` : p; // if BASE is "", keep it relative for the rewrite
 }
-async function _get(url) {
-  const res = await fetch(url);
-  const data = await _json(res);
-  if (!res.ok) throw new Error(data?.message || data?.error || `HTTP ${res.status}`);
-  return data;
+
+async function handle(res) {
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try {
+      const text = await res.text();
+      if (text) msg += ` – ${text}`;
+    } catch {}
+    throw new Error(msg);
+  }
+  const ct = res.headers.get("content-type") || "";
+  return ct.includes("application/json") ? res.json() : res.text();
 }
-async function _post(url, body) {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body || {})
+
+// --- public API used by the app ---
+
+export async function ping() {
+  const u = apiUrl("/api/health");
+  const res = await fetch(u, { mode: "cors" });
+  return handle(res);
+}
+
+export async function getBuildings(bbox, limit = 1200) {
+  const qs = new URLSearchParams({
+    bbox: bbox.join(","),
+    limit: String(limit),
   });
-  const data = await _json(res);
-  if (!res.ok) throw new Error(data?.message || data?.error || `HTTP ${res.status}`);
-  return data;
+  const u = apiUrl(`/api/buildings?${qs}`);
+  const res = await fetch(u, { mode: "cors" });
+  return handle(res);
 }
 
-// ---- public API surface ----
-export function ping() {
-  return _get(`${API_BASE}/api/health`);
-}
-export function getBuildings(bbox, limit = 1200) {
-  const qs = new URLSearchParams({ bbox: bbox.join(","), limit: String(limit) }).toString();
-  return _get(`${API_BASE}/api/buildings?${qs}`);
-}
-export function parseLLM(query, bbox, limit) {
-  return _post(`${API_BASE}/api/llm_filter`, { query, bbox, limit });
-}
-export function applyFilters(filters, bbox, limit) {
-  return _post(`${API_BASE}/api/filter_apply`, { filters, bbox, limit });
+export async function parseLLM(query, bbox, limit = 1200) {
+  const u = apiUrl("/api/llm_filter");
+  const res = await fetch(u, {
+    method: "POST",
+    mode: "cors",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, bbox, limit }),
+  });
+  return handle(res);
 }
 
-// Projects
-export function listProjects(username) {
-  const qs = new URLSearchParams({ username }).toString();
-  return _get(`${API_BASE}/api/projects/list?${qs}`);
+export async function applyFilters(filters, bbox, limit = 1200) {
+  const u = apiUrl("/api/filter_apply");
+  const res = await fetch(u, {
+    method: "POST",
+    mode: "cors",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filters, bbox, limit }),
+  });
+  return handle(res);
 }
-export function saveProjectApi(payload) {
-  return _post(`${API_BASE}/api/projects/save`, payload);
+
+// ------- Projects -------
+export async function listProjects(username) {
+  const qs = new URLSearchParams({ username });
+  const u = apiUrl(`/api/projects/list?${qs}`);
+  const res = await fetch(u, { mode: "cors" });
+  return handle(res);
 }
-export function loadProject(username, name) {
-  const qs = new URLSearchParams({ username, name }).toString();
-  return _get(`${API_BASE}/api/projects/load?${qs}`);
+
+export async function saveProjectApi({ username, name, query, filters, bbox, limit }) {
+  const u = apiUrl("/api/projects/save");
+  const res = await fetch(u, {
+    method: "POST",
+    mode: "cors",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, name, query, filters, bbox, limit }),
+  });
+  return handle(res);
+}
+
+export async function loadProject(username, name) {
+  const qs = new URLSearchParams({ username, name });
+  const u = apiUrl(`/api/projects/load?${qs}`);
+  const res = await fetch(u, { mode: "cors" });
+  return handle(res);
 }
