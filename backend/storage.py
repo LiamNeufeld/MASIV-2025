@@ -1,8 +1,8 @@
+from contextlib import contextmanager
 import os
 import sqlite3
 import json
 import time
-from contextmanager import contextmanager
 from typing import List, Dict, Any, Optional
 
 # Prefer env var; on Render without disks, set PROJECTS_DB_PATH=/tmp/projects.db
