@@ -1,0 +1,5 @@
+html, body, #root { height: 100%; margin: 0; }
+* { box-sizing: border-box; font-family: Inter, system-ui, Arial, sans-serif; }
+input, button { font: inherit; }
+label { display:block; margin-top: 10px; font-weight:600; }
+button { cursor:pointer; }
