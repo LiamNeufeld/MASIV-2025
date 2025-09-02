@@ -6,6 +6,6 @@
     "start": "cd frontend && vite preview"
   },
   "devDependencies": {
-    "vite": "^5.0.0"
+    "vite": "^5.4.0"
   }
 }
