@@ -3,12 +3,12 @@
 // If you ALSO set VITE_API_BASE on Vercel, we'll use it; otherwise we keep
 // calls relative (and vercel.json will rewrite /api/* to Render).
 const RAW_BASE = (import.meta?.env?.VITE_API_BASE || "").trim();
-const BASE = RAW_BASE.endsWith("/") ? RAW_BASE.slice(0, -1) : RAW_BASE;
+const BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/$/, "");
 
 function apiUrl(path) {
-  const p = path.startsWith("/") ? path : `/${path}`;
-  return BASE ? `${BASE}${p}` : p; // if BASE is "", keep it relative for the rewrite
+  return `${BASE}${path.startsWith("/") ? "" : "/"}${path}`;
 }
+
 
 async function handle(res) {
   if (!res.ok) {
