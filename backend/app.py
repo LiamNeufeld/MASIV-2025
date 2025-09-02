@@ -24,7 +24,8 @@ if _origins_env == "*":
 else:
     _origins = [o.strip() for o in _origins_env.split(",") if o.strip()]
 
-CORS(app, resources={r"/api/*": {"origins": _origins}})
+CORS(app, resources={r"/api/*": {"origins": "*"}})
+
 
 
 # -----------------------------------------------------------------------------
