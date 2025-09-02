@@ -1,7 +1,7 @@
 {
   "private": true,
   "scripts": {
-    "build": "cd frontend && npx vite build",
+    "build": "cd frontend && npm exec vite build",
     "dev": "cd frontend && npx vite",
     "start": "cd frontend && npx vite preview"
   },
