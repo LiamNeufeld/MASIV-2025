@@ -1,0 +1,14 @@
+{
+  "builds": [
+    {
+      "src": "frontend/package.json",
+      "use": "@vercel/static-build",
+      "config": { "distDir": "dist" }
+    }
+  ],
+  "installCommand": "cd frontend && npm ci --include=dev",
+  "buildCommand": "cd frontend && npm run build",
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "https://<YOUR-BACKEND>.onrender.com/api/:path*" }
+  ]
+}
